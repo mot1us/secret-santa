@@ -77,6 +77,24 @@ invalidates a draft. The choices carry into new years alongside the roster and
 remain saved when someone is left out. Unrelated mutual pairs are allowed.
 Finalized or archived partner choices cannot change. Older finalized exchanges
 retain their original restrictions.
+
+For individual exceptions, use **Rules → Extra exclusions**. Choose the giver
+and the person they must not draw, then select **Add exclusion**. Each rule is
+one-way: the reverse direction remains allowed unless another rule blocks it.
+Extra exclusions work alongside existing partners and the two-year history;
+they do not consume or change either person's partner selection.
+
+Extra exclusions apply only to the selected year and are not copied into a new
+exchange. They survive restarts and explicit test-data resets. Adding or removing
+a rule clears the current unfinalized draft, preserving wish lists, invitations,
+partners and past matches. Re-adding an existing rule or removing an absent rule
+does not discard a draft. Finalized or archived rules cannot be changed.
+
+To check restrictions privately, leave **Show test pairings** unchecked under
+**Draw → Test matchmaking**. The result includes **Saved exclusions respected**;
+it does not reveal the generated pairs. Draft generation and finalization enforce
+the same restrictions, and impossible rules are reported without relaxing them.
+
 The latest two years' directed giver-to-recipient matches are excluded even if
 their history is provisional. A draw can be drafted with incomplete history but
 cannot be finalized until both preceding histories are verified.

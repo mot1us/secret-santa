@@ -1,7 +1,7 @@
 {
   "name": "ornament",
   "description": "Self-hosted Secret Santa for family and friends.",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "private": true,
   "license": "MIT",
   "type": "module",

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.5
+
+- Add year-specific, one-way extra exclusions in Rules alongside existing partner restrictions. Adding or removing a rule clears only the unfinalized draft; saved wish lists, invitations, partners and history are preserved.
+- Apply saved exclusions to hidden matchmaking checks, drafts and final validation. Keep finalized draws locked, avoid clearing drafts for duplicate rules, and allow checking restrictions without revealing pairings.
+
 ## 0.10.4
 
 - Add a reviewed Resend invitation action for one person, including lost or expired invitations. Each resend issues a fresh 48-hour link, preserves saved wish lists and prior delivery records, and sends only the selected message.

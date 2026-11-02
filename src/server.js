@@ -11,7 +11,7 @@ import { prepareSignIn, consumeSignIn, expireSignIns } from './signin.js';
 import { groupLink, submissionProfile, saveSubmission, listSubmissions, approveSubmission, rejectSubmission } from './submissions.js';
 import { checkedWishlist, validateWishlist } from './validation.js';
 import { validateDraw } from './matching.js';
-import { savePartners, resetPreview, resetExchange } from './exchange-management.js';
+import { savePartners, saveExclusion, resetPreview, resetExchange } from './exchange-management.js';
 
 export function createApp(config,db,providedTransport) {
   const app = express();
@@ -143,6 +143,7 @@ export function createApp(config,db,providedTransport) {
       validation:validateWishlist(p,p.email),changesRequested:p.changes_requested,invitation:invitationStatus(db,year,p)})) : [];
     res.json({exchanges,currentYears,historyYears,year,exchange,people,identities:db.prepare('SELECT id,name,email,aliases FROM people ORDER BY name COLLATE NOCASE').all().map(p=>({...p,aliases:JSON.parse(p.aliases)})),submissions:exchange?listSubmissions(db,year):[],
       exclusions:exchange ? matchingOptions(db,year).exclusions : [],
+      extraExclusions:exchange ? db.prepare('SELECT giver,recipient FROM exclusions WHERE year=? ORDER BY giver,recipient').all(year) : [],
       partners:exchange ? db.prepare('SELECT first,second FROM partners WHERE year=? ORDER BY first').all(year) : [],
       reset:exchange ? resetPreview(db,year) : null,
       resets:exchange ? db.prepare('SELECT id,summary,created_at FROM exchange_resets WHERE year=? ORDER BY created_at DESC').all(year).map(r=>({...r,summary:JSON.parse(r.summary)})) : [],
@@ -318,18 +319,7 @@ export function createApp(config,db,providedTransport) {
     res.json(resetExchange(db,Number(req.body.year),req.body));
   });
   app.post('/api/admin/exclusions',(req,res)=>{
-    const year = Number(req.body.year);mutable(db,year);
-    if(!req.body.remove)throw new Error('Use partner selection in Rules to exclude a couple in both directions.');
-    const people = members(db,year).map(p=>p.id);
-    if (req.body.giver===req.body.recipient || !people.includes(req.body.giver) || !people.includes(req.body.recipient)) throw new Error('Choose two distinct people in this exchange.');
-    transaction(db,()=>{
-      const pairs = [[req.body.giver,req.body.recipient]];
-      if (req.body.bothDirections) pairs.push([req.body.recipient,req.body.giver]);
-      for (const [giver,recipient] of pairs) {
-        db.prepare('DELETE FROM exclusions WHERE year=? AND giver=? AND recipient=?').run(year,giver,recipient);
-      }
-      invalidateDraft(db,year);audit(db,'save-exclusions',{year});
-    });res.json({ok:true});
+    res.json(saveExclusion(db,Number(req.body.year),req.body));
   });
   app.post('/api/admin/draft',(req,res)=>{const year=Number(req.body.year);draftDraw(db,year);res.json({ok:true,draw:drawStatus(year)});});
   app.post('/api/admin/matching-test',(req,res)=>{

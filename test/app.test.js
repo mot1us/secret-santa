@@ -187,6 +187,66 @@ test('matching diagnostics report impossible rules and unconfirmed history witho
   assert.equal(db.prepare('SELECT state FROM exchanges WHERE year=2026').get().state,'open');
 });
 
+test('extra exclusions enforce one direction alongside partners in tests, drafts and finalization without exposing the draw',async t=>{
+  let sends=0;const {db,config,call,admin}=await fixture(t,{transport:{async sendMail(){sends++;throw new Error('No delivery during rule changes.');}}});seed(db);
+  const people=members(db,2026),giver=people[0],recipient=people[3],body={year:2026,giver:giver.id,recipient:recipient.id};
+  savePartners(db,2026,{first:giver.id,second:people[5].id});savePartners(db,2026,{first:recipient.id,second:people[8].id});
+  prepareMail(db,config,2026,'invite');draftDraw(db,2026);
+  const before={people:db.prepare('SELECT * FROM people ORDER BY id').all(),lists:db.prepare('SELECT * FROM enrollments ORDER BY year,person_id').all(),partners:db.prepare('SELECT * FROM partners ORDER BY year,first').all(),mail:db.prepare('SELECT * FROM outbox ORDER BY id').all(),history:db.prepare('SELECT * FROM assignments WHERE year<2026 ORDER BY year,giver').all()};
+  assert.equal((await call('/admin/exclusions',body,admin)).data.changed,true);
+  let state=(await call('/admin/state?year=2026',undefined,admin)).data;
+  assert.equal(state.exchange.state,'open');assert.deepEqual(state.assignments,[]);assert.equal(state.draw.count,0);
+  assert.deepEqual(state.extraExclusions,[{giver:giver.id,recipient:recipient.id}]);assert.equal(state.partners.length,2);
+  const report=await call('/admin/matching-test',{year:2026},admin);
+  assert.equal(report.data.status,'passed');assert.equal(report.data.checked,100);assert.equal(report.data.testDraws,undefined);
+  assert.ok(report.data.rules.includes('Saved exclusions respected'));
+  for(const person of people)for(const value of [person.id,person.name,person.email,person.wishlist])assert.equal(JSON.stringify(report.data).includes(value),false);
+  const shown=await call('/admin/matching-test',{year:2026,showPairings:true,confirm:'REVEAL'},admin);
+  for(const pairs of shown.data.testDraws)assert.equal(pairs.some(p=>p.giver===giver.id&&p.recipient===recipient.id),false);
+  const reverseAllowed=people.map((p,i)=>({giver:p.id,recipient:people[(i+7)%10].id}));
+  assert.ok(reverseAllowed.some(p=>p.giver===recipient.id&&p.recipient===giver.id));assert.deepEqual(validateDraw(reverseAllowed,people.map(p=>p.id),matchingOptions(db,2026)),[]);
+  assert.equal((await call('/admin/draft',{year:2026},admin)).status,200);
+  // A stale or tampered draft must be rechecked before finalization.
+  db.prepare('DELETE FROM assignments WHERE year=2026').run();
+  for(const [i,p] of people.entries())db.prepare('INSERT INTO assignments(year,giver,recipient) VALUES (2026,?,?)').run(p.id,people[(i+3)%10].id);
+  assert.equal((await call('/admin/finalize',{year:2026,confirm:'FINALIZE'},admin)).status,400);
+  assert.equal((await call('/admin/draft',{year:2026},admin)).status,200);
+  state=(await call('/admin/state?year=2026',undefined,admin)).data;assert.deepEqual(state.assignments,[]);assert.equal(state.draw.passed,true);
+  assert.equal((await call('/admin/finalize',{year:2026,confirm:'FINALIZE'},admin)).status,200);
+  const finalized=db.prepare('SELECT * FROM assignments WHERE year=2026 ORDER BY giver').all();
+  for(const remove of [false,true])assert.equal((await call('/admin/exclusions',{...body,remove},admin)).status,400);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE year=2026 ORDER BY giver').all(),finalized);
+  assert.deepEqual(db.prepare('SELECT * FROM people ORDER BY id').all(),before.people);assert.deepEqual(db.prepare('SELECT * FROM enrollments ORDER BY year,person_id').all(),before.lists);
+  assert.deepEqual(db.prepare('SELECT * FROM partners ORDER BY year,first').all(),before.partners);assert.deepEqual(db.prepare('SELECT * FROM outbox ORDER BY id').all(),before.mail);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments WHERE year<2026 ORDER BY year,giver').all(),before.history);assert.equal(sends,0);
+});
+
+test('extra exclusions require organizer review and valid roster members; only actual rule changes invalidate drafts',async t=>{
+  const {db,call,admin}=await fixture(t);seed(db);const people=members(db,2026),body={year:2026,giver:people[0].id,recipient:people[3].id};
+  draftDraw(db,2026);const before=db.prepare('SELECT * FROM assignments ORDER BY year,giver').all();
+  for(const auth of [{},{...admin,csrf:'wrong'},{...admin,headers:{Origin:'https://attacker.test'}}])assert.equal((await call('/admin/exclusions',body,auth)).status,403);
+  for(const invalid of [{giver:body.recipient},{recipient:'unknown'},{year:2025},{remove:'true'},{bothDirections:true}])assert.equal((await call('/admin/exclusions',{...body,...invalid},admin)).status,400);
+  assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY year,giver').all(),before);assert.equal(db.prepare('SELECT count(*) AS n FROM exclusions').get().n,0);
+  assert.equal((await call('/admin/exclusions',body,admin)).data.changed,true);draftDraw(db,2026);
+  const draft=db.prepare('SELECT * FROM assignments ORDER BY year,giver').all();
+  assert.equal((await call('/admin/exclusions',body,admin)).data.changed,false);assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY year,giver').all(),draft);
+  assert.equal((await call('/admin/exclusions',{...body,remove:true},admin)).data.changed,true);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM assignments WHERE year=2026').get().n,0);draftDraw(db,2026);
+  const unchanged=db.prepare('SELECT * FROM assignments ORDER BY year,giver').all();
+  assert.equal((await call('/admin/exclusions',{...body,remove:true},admin)).data.changed,false);assert.deepEqual(db.prepare('SELECT * FROM assignments ORDER BY year,giver').all(),unchanged);
+});
+
+test('extra exclusions survive reopening and explicit test resets but remain specific to their exchange year',async t=>{
+  const {db,dir,call,admin}=await fixture(t);seed(db);const people=members(db,2026),body={year:2026,giver:people[0].id,recipient:people[3].id};
+  assert.equal((await call('/admin/exclusions',body,admin)).status,200);
+  const reopened=openDatabase(dir);
+  try {assert.equal(reopened.prepare('SELECT count(*) AS n FROM exclusions WHERE year=2026').get().n,1);}finally{reopened.close();}
+  createExchange(db,2027);assert.equal(db.prepare('SELECT count(*) AS n FROM exclusions WHERE year=2027').get().n,0);
+  const state=(await call('/admin/state?year=2026',undefined,admin)).data;
+  assert.equal((await call('/admin/reset',{year:2026,confirm:'RESET 2026',review:state.reset.review},admin)).status,200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM exclusions WHERE year=2026').get().n,1);
+});
+
 test('unmarked pairs may be mutual when the two-year history allows them',async t=>{
   const {db,call,admin}=await fixture(t),names=['Alex','Jamie','Casey','Morgan'];
   importHistory(db,history(2024,1,names));importHistory(db,history(2025,3,names));createExchange(db,2026);
@@ -847,8 +907,8 @@ test('a complete exchange goes from shared submissions to reviewed identities, r
   }
   assert.equal(db.prepare('SELECT count(*) AS n FROM people').get().n,11);
   const people=members(db,2026),first=people[0],excluded=people.find(p=>p.id!==first.id);
-  assert.equal((await call('/admin/exclusions',{year:2026,giver:first.id,recipient:excluded.id},admin)).status,400);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM exclusions WHERE year=2026').get().n,0);
+  assert.equal((await call('/admin/exclusions',{year:2026,giver:first.id,recipient:excluded.id},admin)).status,200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM exclusions WHERE year=2026').get().n,1);
   assert.equal((await call('/admin/draft',{year:2026},admin)).status,200);
   assert.equal((await call('/admin/finalize',{year:2026,confirm:'FINALIZE'},admin)).status,400);
   assert.equal((await call('/admin/history/confirm',{year:2025},admin)).status,200);
@@ -859,6 +919,7 @@ test('a complete exchange goes from shared submissions to reviewed identities, r
   assert.equal(pairs.length,11);assert.equal(new Set(pairs.map(p=>p.recipient)).size,11);
   for(const pair of pairs) {
     assert.notEqual(pair.giver,pair.recipient);
+    assert.equal(pair.giver===first.id&&pair.recipient===excluded.id,false);
     assert.equal(previous.some(p=>p.giver===pair.giver&&p.recipient===pair.recipient),false);
   }
   assert.equal((await call('/admin/mail/prepare',{year:2026,kind:'assignment'},admin)).status,200);

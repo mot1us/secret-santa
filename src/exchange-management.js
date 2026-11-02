@@ -20,6 +20,25 @@ export function savePartners(db,year,{first,second,remove=false}) {
   });
 }
 
+export function saveExclusion(db,year,{giver,recipient,remove=false,bothDirections=false}) {
+  mutable(db,year);
+  if(typeof remove!=='boolean'||typeof bothDirections!=='boolean')throw new Error('Choose whether to add or remove this exclusion.');
+  if(bothDirections&&!remove)throw new Error('Extra exclusions apply in one direction. Use Partners for couples, or add each direction separately.');
+  const ids=db.prepare('SELECT person_id FROM enrollments WHERE year=?').all(year).map(p=>p.person_id);
+  if(giver===recipient||!ids.includes(giver)||!ids.includes(recipient))throw new Error('Choose two different people in this year’s roster.');
+  return transaction(db,()=>{
+    const pairs=[[giver,recipient],...(bothDirections?[[recipient,giver]]:[])];
+    let changes=0;
+    for(const [from,to] of pairs)changes+=remove
+      ?db.prepare('DELETE FROM exclusions WHERE year=? AND giver=? AND recipient=?').run(year,from,to).changes
+      :db.prepare('INSERT OR IGNORE INTO exclusions(year,giver,recipient) VALUES (?,?,?)').run(year,from,to).changes;
+    if(changes) {
+      invalidateDraft(db,year);audit(db,'save-exclusions',{year,giver,recipient,remove,bothDirections});
+    }
+    return {ok:true,changed:Boolean(changes)};
+  });
+}
+
 function resetData(db,year) {
   return {exchange:getExchange(db,year),
     enrollments:db.prepare('SELECT * FROM enrollments WHERE year=? ORDER BY person_id').all(year),

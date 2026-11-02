@@ -1,6 +1,6 @@
 services:
   ornament:
-    image: ghcr.io/mot1us/ornament:0.10.4
+    image: ghcr.io/mot1us/ornament:0.10.5
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.50
@@ -35,7 +35,7 @@ services:
       - ALL
 
   ornament-backup:
-    image: ghcr.io/mot1us/ornament:0.10.4
+    image: ghcr.io/mot1us/ornament:0.10.5
     restart: unless-stopped
     mem_limit: 128m
     cpus: 0.25
